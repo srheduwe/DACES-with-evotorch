@@ -304,6 +304,8 @@ class SearchAlgorithm(LazyReporter):
         self._steps_count: int = 0
         self._first_step_datetime: Optional[datetime] = None
 
+        # self._last_best_eval: float = 1000.0
+
     @property
     def problem(self) -> Problem:
         """
@@ -421,8 +423,16 @@ class SearchAlgorithm(LazyReporter):
         if reset_first_step_datetime:
             self.reset_first_step_datetime()
 
+        SinglePopulationAlgorithmMixin.__init__(self)
+
         for _ in range(int(num_generations)):
             self.step()
+
+            if self._problem._query_counter.sum() > (self._problem._query_budget - self.popsize):
+                break
+
+            if (self.ObjectiveStatusReporter._get_pop_best_eval(self) is None) and (i > 3):
+                break 
 
         if len(self._end_of_run_hook) >= 1:
             self._end_of_run_hook(dict(self.status))
@@ -445,7 +455,6 @@ class SearchAlgorithm(LazyReporter):
     def is_terminated(self) -> bool:
         """Whether the algorithm is in a terminal state"""
         return False
-
 
 class SinglePopulationAlgorithmMixin:
     """

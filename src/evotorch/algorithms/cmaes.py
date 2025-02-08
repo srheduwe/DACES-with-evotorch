@@ -217,9 +217,6 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
         # Ensure that the problem is numeric
         problem.ensure_numeric()
 
-        # CMAES can't handle problem bounds. Ensure that it is unbounded
-        problem.ensure_unbounded()
-
         # Store the objective index
         self._obj_index = problem.normalize_obj_index(obj_index)
 
@@ -251,13 +248,7 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
             center_init = center_init.values.clone()
 
         # Store the center
-        self.m = self._problem.make_tensor(center_init).squeeze()
-        valid_shaped_m = (self.m.ndim == 1) and (len(self.m) == self._problem.solution_length)
-        if not valid_shaped_m:
-            raise ValueError(
-                f"The initial center point was expected as a vector of length {self._problem.solution_length}."
-                " However, the provided `center_init` has (or implies) a different shape."
-            )
+        self.m = self._problem.make_tensor(center_init)
 
         # Store the initial step size
         self.sigma = self._problem.make_tensor(stdev_init)
@@ -474,8 +465,15 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
         # Compute the weighted recombination in shaped coordinate space
         shaped_m_displacement = torch.sum(top_mu_weights.unsqueeze(-1) * ys[top_mu_indices], dim=0)
 
-        # Update m
-        self.m = self.m + self.c_m * self.sigma * shaped_m_displacement
+        d = self._problem.solution_length
+
+        # Update m if there is no sigma_update_search
+        if self.problem._exp_update is None:
+            self.m = self.m + self.c_m * self.sigma * shaped_m_displacement
+        # Otherwise we do not update m and set the displacement to 0
+        else:
+            local_m_displacement = torch.zeros(d, device=self.problem._device)
+            shaped_m_displacement = torch.zeros(d, device=self.problem._device)
 
         # Return the weighted recombinations
         return local_m_displacement, shaped_m_displacement
@@ -495,16 +493,23 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
         """
         d = self._problem.solution_length
         # Compute the exponential update
-        if self.csa_squared:
+        if self.problem._exp_update is not None:
+            exponential_update = torch.tensor(self.problem._exp_update)
+        elif self.csa_squared:
             # Exponential update based on natural gradient maximizing squared norm of p_sigma
             exponential_update = (torch.norm(self.p_sigma).pow(2.0) / d - 1) / 2
+            # Rescale exponential update based on learning rate + damping factor
+            exponential_update = (self.c_sigma / self.damp_sigma) * exponential_update
         else:
             # Exponential update increasing likelihood p_sigma having expected norm
             exponential_update = torch.norm(self.p_sigma) / self.unbiased_expectation - 1
-        # Rescale exponential update based on learning rate + damping factor
-        exponential_update = (self.c_sigma / self.damp_sigma) * exponential_update
+            # Rescale exponential update based on learning rate + damping factor
+            exponential_update = (self.c_sigma / self.damp_sigma) * exponential_update
+
         # Multiplicative update to sigma
         self.sigma = self.sigma * torch.exp(exponential_update)
+        # Enforce stdv constraints
+        self.sigma = torch.clamp(input=self.sigma, min=self.stdev_min, max=self.stdev_max)
 
     def update_p_c(self, shaped_m_displacement: torch.Tensor, h_sig: torch.Tensor) -> None:
         """Update the evolution path for rank-1 update, p_c
@@ -566,7 +571,6 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
 
     def _step(self):
         """Perform a step of the CMA-ES solver"""
-
         # === Sampling, evaluation and ranking ===
 
         # Sample the search distribution
@@ -575,7 +579,6 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
         assigned_weights = self.get_population_weights(xs)
 
         # === Center adaption ===
-
         local_m_displacement, shaped_m_displacement = self.update_m(zs, ys, assigned_weights)
 
         # === Step size adaption ===
