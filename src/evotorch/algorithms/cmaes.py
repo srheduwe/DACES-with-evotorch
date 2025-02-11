@@ -275,6 +275,7 @@ class CMAES(SearchAlgorithm, SinglePopulationAlgorithmMixin):
         # Variance effective selection mass of positive weights
         # Not affected by future updates to raw_weights
         self.mu_eff = torch.sum(positive_weights).pow(2.0) / torch.sum(positive_weights.pow(2.0))
+        self._problem.mu_eff = self.mu_eff
 
         # === Initialize search parameters ===
         # Conditioned on weights
