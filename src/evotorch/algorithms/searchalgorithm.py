@@ -425,11 +425,15 @@ class SearchAlgorithm(LazyReporter):
 
         SinglePopulationAlgorithmMixin.__init__(self)
 
-        for _ in range(int(num_generations)):
+        for i in range(int(num_generations)):
             self.step()
 
             if self._problem._query_counter.sum() > (self._problem._query_budget - self.popsize):
                 break
+
+            if i > 2:
+                if self._problem._time[-1] >= (self._problem._time_budget - (self._problem._time[-1] - self._problem._time[-2])):
+                    break
 
             if (self.ObjectiveStatusReporter._get_pop_best_eval(self) is None) and (i > 3):
                 break 
